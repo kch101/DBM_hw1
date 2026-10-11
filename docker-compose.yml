@@ -1,0 +1,106 @@
+x-redis: &redis
+  image: redis:7.4
+  networks: [gamehub]
+  restart: unless-stopped
+
+x-sentinel: &sentinel
+  image: redis:7.4
+  networks: [gamehub]
+  restart: unless-stopped
+  volumes:
+    - ./sentinel/sentinel.conf:/conf/sentinel.conf:ro
+  command: sh -c "cp /conf/sentinel.conf /tmp/sentinel.conf && exec redis-sentinel /tmp/sentinel.conf"
+  depends_on: [redis-master, redis-replica-1, redis-replica-2]
+
+x-app: &app
+  build: .
+  networks: [gamehub]
+  restart: unless-stopped
+  volumes:
+    - ./:/app
+  environment:
+    REDIS_SENTINELS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+    REDIS_MASTER_NAME: mymaster
+  depends_on: [redis-sentinel-1, redis-sentinel-2, redis-sentinel-3]
+
+services:
+  redis-master:
+    <<: *redis
+    container_name: redis-master
+    hostname: redis-master
+    ports: ["6379:6379"]
+    volumes:
+      - ./redis/master.conf:/conf/redis.conf:ro
+      - redis-master-data:/data
+    command: sh -c "cp /conf/redis.conf /data/redis.conf && exec redis-server /data/redis.conf --replica-announce-ip redis-master"
+
+  redis-replica-1:
+    <<: *redis
+    container_name: redis-replica-1
+    hostname: redis-replica-1
+    ports: ["6380:6379"]
+    volumes:
+      - ./redis/replica.conf:/conf/redis.conf:ro
+      - redis-replica-1-data:/data
+    command: sh -c "cp /conf/redis.conf /data/redis.conf && exec redis-server /data/redis.conf --replica-announce-ip redis-replica-1"
+    depends_on: [redis-master]
+
+  redis-replica-2:
+    <<: *redis
+    container_name: redis-replica-2
+    hostname: redis-replica-2
+    ports: ["6381:6379"]
+    volumes:
+      - ./redis/replica.conf:/conf/redis.conf:ro
+      - redis-replica-2-data:/data
+    command: sh -c "cp /conf/redis.conf /data/redis.conf && exec redis-server /data/redis.conf --replica-announce-ip redis-replica-2"
+    depends_on: [redis-master]
+
+  redis-sentinel-1:
+    <<: *sentinel
+    container_name: redis-sentinel-1
+    hostname: redis-sentinel-1
+    ports: ["26379:26379"]
+
+  redis-sentinel-2:
+    <<: *sentinel
+    container_name: redis-sentinel-2
+    hostname: redis-sentinel-2
+    ports: ["26380:26379"]
+
+  redis-sentinel-3:
+    <<: *sentinel
+    container_name: redis-sentinel-3
+    hostname: redis-sentinel-3
+    ports: ["26381:26379"]
+
+  app:
+    <<: *app
+    container_name: gamehub-app
+    ports: ["8000:8000"]
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  consumer:
+    <<: *app
+    container_name: gamehub-consumer
+    command: python -u consumer.py
+    environment:
+      REDIS_SENTINELS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDIS_MASTER_NAME: mymaster
+      CONSUMER_NAME: consumer-1
+
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: redis-insight
+    networks: [gamehub]
+    ports: ["5540:5540"]
+    restart: unless-stopped
+
+networks:
+  gamehub:
+    driver: bridge
+
+volumes:
+  redis-master-data:
+  redis-replica-1-data:
+  redis-replica-2-data:
